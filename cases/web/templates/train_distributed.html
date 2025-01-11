@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MNIST LeNet 分布式训练控制面板</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <nav class="nav">
+            <h1>MNIST LeNet 分布式训练控制面板</h1>
+            <a href="http://127.0.0.1:5092" class="nav-link">可视化图表</a>
+        </nav>
+
+        <div class="network-structure">
+            <h3 class="section-title">分布式训练配置</h3>
+            <div class="distributed-config">
+                <div class="param-group">
+                    <label for="world-size">节点数量 (2-5):</label>
+                    <input type="number" id="world-size" min="2" max="5" value="2" onchange="updateNodesConfigUI(this.value)">
+                </div>
+                <div id="nodes-config" class="nodes-grid">
+                    <!-- 默认显示2个节点配置 -->
+                    <div class="node-config" id="node-config-0">
+                        <h4>节点 0 (主节点)</h4>
+                        <div class="param-group">
+                            <label for="node-0-ip">IP地址:</label>
+                            <input type="text" id="node-0-ip" value="127.0.0.1" placeholder="例如: 127.0.0.1">
+                        </div>
+                        <div class="param-group">
+                            <label for="node-0-port">端口:</label>
+                            <input type="number" id="node-0-port" value="29500" min="1024" max="65535">
+                        </div>
+                    </div>
+                    <div class="node-config" id="node-config-1">
+                        <h4>节点 1</h4>
+                        <div class="param-group">
+                            <label for="node-1-ip">IP地址:</label>
+                            <input type="text" id="node-1-ip" value="127.0.0.1" placeholder="例如: 127.0.0.1">
+                        </div>
+                        <div class="param-group">
+                            <label for="node-1-port">端口:</label>
+                            <input type="number" id="node-1-port" value="29501" min="1024" max="65535">
+                        </div>
+                    </div>
+                </div>
+                <button onclick="updateDistributedConfig()" class="button save-params">更新分布式配置</button>
+            </div>
+        </div>
+
+        <div class="params-container">
+            <div class="params-section">
+                <div class="params-panel training-params">
+                    <h3 class="section-title">训练参数设置</h3>
+                    <div class="param-group">
+                        <label for="learning-rate">学习率:</label>
+                        <input type="number" id="learning-rate" value="0.01" step="0.001" min="0.0001" max="1">
+                    </div>
+                    <div class="param-group">
+                        <label for="batch-size">Batch Size:</label>
+                        <input type="number" id="batch-size" value="64" step="1" min="1" max="512">
+                    </div>
+                    <div class="param-group">
+                        <label for="epochs">训练轮数:</label>
+                        <input type="number" id="epochs" value="10" step="1" min="1" max="100">
+                    </div>
+                    <div class="param-group">
+                        <label for="optimizer">优化器:</label>
+                        <select id="optimizer">
+                            <option value="Adam">Adam</option>
+                            <option value="SGD">SGD</option>
+                            <option value="Adagrad">Adagrad</option>
+                        </select>
+                    </div>
+                    <button onclick="updateTrainingParams()" class="button save-params">保存训练参数</button>
+                </div>
+            </div>
+
+            <div class="status">
+                <h3 class="section-title">训练状态</h3>
+                <p>当前状态: <span id="trainingStatus">未开始</span></p>
+                <div class="progress-bar">
+                    <div id="progressBar" class="progress"></div>
+                </div>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <div class="status-label">当前轮次/总轮次</div>
+                        <div class="status-value">
+                            <span id="currentEpoch">0</span>/<span id="totalEpochs">0</span>
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">当前批次/总批次</div>
+                        <div class="status-value">
+                            <span id="currentBatch">0</span>/<span id="totalBatches">0</span>
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">总节点数</div>
+                        <div class="status-value" id="totalNodes">2</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">活跃节点</div>
+                        <div class="status-value" id="activeNodes">0</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">已处理样本数</div>
+                        <div class="status-value" id="samplesProcessed">0</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">训练速度</div>
+                        <div class="status-value">
+                            <span id="samplesPerSecond">0</span> 样本/秒
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">最新准确率</div>
+                        <div class="status-value accuracy-value" id="currentAccuracy">0%</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">最新损失值</div>
+                        <div class="status-value loss-value" id="currentLoss">0.0000</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">已运行时间</div>
+                        <div class="status-value" id="elapsedTime">0.0 秒</div>
+                    </div>
+                </div>
+                <div class="status-controls">
+                    <button id="start-btn" class="button start" onclick="startTraining()">开始训练</button>
+                    <button id="stop-btn" class="button stop" onclick="stopTraining()" disabled>停止训练</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="nodes-status">
+            <h3 class="section-title">节点状态</h3>
+            <div id="process-status" class="process-grid">
+                <!-- 进程状态将通过JavaScript动态更新 -->
+            </div>
+        </div>
+
+        <div class="chat-container">
+            <h3 class="section-title">AI助手</h3>
+            <div class="chat-messages" id="chatMessages">
+                <div class="message ai-message">
+                    你好！我是AI助手，我可以帮你分析分布式训练情况，提供优化建议。请随时向我提问！
+                    <div class="message-time">系统消息</div>
+                </div>
+            </div>
+            <div class="chat-input">
+                <input type="text" id="chatInput" placeholder="输入你的问题..." onkeypress="if(event.keyCode==13) sendMessage()">
+                <button onclick="sendMessage()" id="sendButton">发送</button>
+            </div>
+            <div class="preset-questions">
+                <button onclick="setPresetQuestion('各个节点的训练进度是否一致？')">各个节点的训练进度是否一致？</button>
+                <button onclick="setPresetQuestion('分布式训练的效率如何？')">分布式训练的效率如何？</button>
+                <button onclick="setPresetQuestion('是否存在节点性能差异？')">是否存在节点性能差异？</button>
+                <button onclick="setPresetQuestion('如何提高分布式训练效率？')">如何提高分布式训练效率？</button>
+            </div>
+        </div>
+
+        <div class="status-panel">
+            <h3>训练状态</h3>
+            <div class="status-grid">
+                <div class="status-item">
+                    <label>当前轮次:</label>
+                    <span id="currentEpoch">0</span>/<span id="totalEpochs">0</span>
+                </div>
+                <div class="status-item">
+                    <label>当前批次:</label>
+                    <span id="currentBatch">0</span>/<span id="totalBatches">0</span>
+                </div>
+                <div class="status-item">
+                    <label>已处理样本:</label>
+                    <span id="samplesProcessed">0</span>
+                </div>
+                <div class="status-item">
+                    <label>活跃节点:</label>
+                    <span id="activeNodes">0</span>/<span id="totalNodes">0</span>
+                </div>
+                <div class="status-item">
+                    <label>训练速度:</label>
+                    <span id="samplesPerSecond">0</span> 样本/秒
+                </div>
+                <div class="status-item">
+                    <label>最新准确率:</label>
+                    <span id="currentAccuracy">0.00</span>%
+                </div>
+                <div class="status-item">
+                    <label>最新损失值:</label>
+                    <span id="currentLoss">0.000</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+    <script>
+        // 更新节点配置UI
+        function updateNodesConfigUI(count) {
+            const container = document.getElementById('nodes-config');
+            container.innerHTML = '';
+            
+            for (let i = 0; i < count; i++) {
+                const nodeDiv = document.createElement('div');
+                nodeDiv.className = 'node-config';
+                nodeDiv.id = `node-config-${i}`;
+                
+                nodeDiv.innerHTML = `
+                    <h4>节点 ${i}${i === 0 ? ' (主节点)' : ''}</h4>
+                    <div class="param-group">
+                        <label for="node-${i}-ip">IP地址:</label>
+                        <input type="text" id="node-${i}-ip" value="127.0.0.1" placeholder="例如: 127.0.0.1">
+                    </div>
+                    <div class="param-group">
+                        <label for="node-${i}-port">端口:</label>
+                        <input type="number" id="node-${i}-port" value="${29500 + i}" min="1024" max="65535">
+                    </div>
+                `;
+                
+                container.appendChild(nodeDiv);
+            }
+        }
+
+        // 验证IP地址格式
+        function isValidIP(ip) {
+            const pattern = /^(\d{1,3}\.){3}\d{1,3}$/;
+            if (!pattern.test(ip)) return false;
+            return ip.split('.').every(num => parseInt(num) >= 0 && parseInt(num) <= 255);
+        }
+
+        // 更新分布式配置
+        function updateDistributedConfig() {
+            const worldSize = parseInt(document.getElementById('world-size').value);
+            const nodes = [];
+            
+            // 收集所有节点配置
+            for (let i = 0; i < worldSize; i++) {
+                const ip = document.getElementById(`node-${i}-ip`).value;
+                const port = parseInt(document.getElementById(`node-${i}-port`).value);
+                
+                // 验证IP地址
+                if (!isValidIP(ip)) {
+                    alert(`节点 ${i} 的IP地址格式无效`);
+                    return;
+                }
+                
+                // 验证端口号
+                if (port < 1024 || port > 65535) {
+                    alert(`节点 ${i} 的端口号必须在1024-65535之间`);
+                    return;
+                }
+                
+                nodes.push({ ip, port });
+            }
+            
+            // 发送配置到服务器
+            fetch('/update_distributed_config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    world_size: worldSize,
+                    nodes: nodes
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert('分布式配置更新成功');
+                    document.getElementById('totalNodes').textContent = worldSize;
+                } else {
+                    alert(data.message);
+                }
+            })
+            .catch(error => {
+                alert('更新配置失败: ' + error);
+            });
+        }
+
+        // 页面加载时初始化配置
+        window.addEventListener('load', function() {
+            // 加载当前分布式配置
+            fetch('/get_distributed_config')
+                .then(response => response.json())
+                .then(config => {
+                    document.getElementById('world-size').value = config.world_size;
+                    updateNodesConfigUI(config.world_size);
+                    
+                    // 填充现有的节点配置
+                    config.nodes.forEach((node, index) => {
+                        document.getElementById(`node-${index}-ip`).value = node.ip;
+                        document.getElementById(`node-${index}-port`).value = node.port;
+                    });
+                });
+        });
+
+        let isTraining = false;
+        let updateTimer = null;
+        let trainingStartTime = 0;
+
+        // 开始定期更新状态
+        function startStatusUpdates() {
+            updateTimer = setInterval(updateStatus, 1000);  // 每秒更新一次
+        }
+
+        // 停止状态更新
+        function stopStatusUpdates() {
+            if (updateTimer) {
+                clearInterval(updateTimer);
+                updateTimer = null;
+            }
+        }
+
+        // 更新训练状态
+        function updateTrainingStatus() {
+            if (!isTraining) {
+                stopStatusUpdates();
+                return;
+            }
+
+            fetch('/get_status')
+                .then(response => response.json())
+                .then(data => {
+                    // 更新训练状态
+                    document.getElementById('trainingStatus').textContent = 
+                        data.is_training ? '训练中' : '已停止';
+
+                    // 更新节点状态
+                    document.getElementById('totalNodes').textContent = data.world_size;
+                    let activeNodes = data.processes.filter(p => p.status === 'running').length;
+                    document.getElementById('activeNodes').textContent = activeNodes;
+
+                    // 更新进度条
+                    let totalEpochs = parseInt(document.getElementById('epochs').value);
+                    let progress = (data.current_epoch / totalEpochs) * 100;
+                    document.getElementById('progressBar').style.width = `${progress}%`;
+
+                    // 更新运行时间
+                    let elapsedTime = (Date.now() - trainingStartTime) / 1000;
+                    document.getElementById('elapsedTime').textContent = 
+                        `${elapsedTime.toFixed(1)} 秒`;
+
+                    // 更新进程状态显示
+                    const processStatus = document.getElementById('process-status');
+                    processStatus.innerHTML = data.processes.map(process => `
+                        <div class="process-info ${process.status}">
+                            <h4>节点 ${process.rank}</h4>
+                            <p>状态: ${getStatusText(process.status)}</p>
+                            ${process.output ? `<p class="output">输出: ${process.output}</p>` : ''}
+                            ${process.message ? `<p class="error">错误: ${process.message}</p>` : ''}
+                        </div>
+                    `).join('');
+
+                    // 如果训练已停止，更新UI状态
+                    if (!data.is_training && isTraining) {
+                        isTraining = false;
+                        document.getElementById('start-btn').disabled = false;
+                        document.getElementById('stop-btn').disabled = true;
+                        document.getElementById('trainingStatus').textContent = '已停止';
+                        stopStatusUpdates();
+                    }
+                })
+                .catch(error => {
+                    console.error('获取状态失败:', error);
+                });
+        }
+
+        // 获取状态文本
+        function getStatusText(status) {
+            const statusMap = {
+                'running': '运行中',
+                'completed': '已完成',
+                'failed': '失败',
+                'error': '错误'
+            };
+            return statusMap[status] || status;
+        }
+
+        // 修改停止训练函数
+        function stopTraining() {
+            fetch('/stop_training')
+                .then(response => response.json())
+                .then(data => {
+                    isTraining = false;
+                    document.getElementById('start-btn').disabled = false;
+                    document.getElementById('stop-btn').disabled = true;
+                    document.getElementById('trainingStatus').textContent = '已停止';
+                    stopStatusUpdates();
+                    alert(data.message);
+                })
+                .catch(error => {
+                    alert('停止训练失败: ' + error);
+                });
+        }
+
+        // 修改开始训练函数
+        function startTraining() {
+            const worldSize = parseInt(document.getElementById('world-size').value);
+            if (worldSize < 2 || worldSize > 5) {
+                alert('节点数量必须在2-5之间');
+                return;
+            }
+
+            fetch('/start_training')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        isTraining = true;
+                        document.getElementById('start-btn').disabled = true;
+                        document.getElementById('stop-btn').disabled = false;
+                        document.getElementById('trainingStatus').textContent = '训练中';
+                        trainingStartTime = Date.now();
+                        startStatusUpdates();
+                    }
+                    alert(data.message);
+                })
+                .catch(error => {
+                    alert('启动训练失败: ' + error);
+                });
+        }
+
+        function updateStatus() {
+            fetch('/get_status')
+                .then(response => response.json())
+                .then(data => {
+                    // 更新训练状态显示
+                    document.getElementById('currentEpoch').textContent = data.current_epoch;
+                    document.getElementById('totalEpochs').textContent = data.total_epochs;
+                    document.getElementById('currentBatch').textContent = data.current_batch;
+                    document.getElementById('totalBatches').textContent = data.total_batches;
+                    document.getElementById('samplesProcessed').textContent = data.samples_processed;
+                    document.getElementById('activeNodes').textContent = data.active_nodes;
+                    document.getElementById('totalNodes').textContent = data.world_size;
+                    document.getElementById('samplesPerSecond').textContent = 
+                        data.samples_per_second.toFixed(1);
+                    document.getElementById('currentAccuracy').textContent = 
+                        data.accuracy.toFixed(2);
+                    document.getElementById('currentLoss').textContent = 
+                        data.loss.toFixed(4);
+                    
+                    // 更新进度条
+                    const progress = (data.current_epoch - 1 + data.current_batch / data.total_batches) 
+                        / data.total_epochs * 100;
+                    document.getElementById('progressBar').style.width = `${progress}%`;
+                });
+        }
+    </script>
+</body>
+</html> 

@@ -1,5 +1,7 @@
 import os
 import sys
+import json
+import time
 
 # 获取项目根目录并添加到 Python 路径
 root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -7,7 +9,6 @@ sys.path.append(root_dir)
 
 import cupy as cp
 import numpy as np
-from time import time
 import swanlab
 
 from mytorch.ops import Max as mymax
@@ -97,14 +98,24 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--rank', type=int, required=True)
     parser.add_argument('--world-size', type=int, required=True)
+    parser.add_argument('--nodes', type=str, required=True)
+    parser.add_argument('--learning-rate', type=float, default=0.01)
+    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--epochs', type=int, default=10)
     args = parser.parse_args()
+
+    # 解析节点配置
+    nodes = []
+    for node in args.nodes.split(','):
+        ip, port = node.split(':')
+        nodes.append((ip, int(port)))
 
     # 定义基本配置参数
     config = {
         "optimizer": "Adam",
-        "learning_rate": 0.03,
-        "batch_size": 64,
-        "num_epochs": 10,
+        "learning_rate": args.learning_rate,
+        "batch_size": args.batch_size,
+        "num_epochs": args.epochs,
         "device": "cuda" if cuda.is_available() else "cpu",
         "world_size": args.world_size
     }
@@ -116,15 +127,6 @@ def main():
             experiment_name="MNIST-LeNet-cupy-distributed",
             config=config
         )
-
-    # 分布式训练配置
-    nodes = [
-        ('127.0.0.1', 29500),  # 进程0
-        ('127.0.0.1', 29501),  # 进程1
-        ('127.0.0.1', 29502),  # 进程2
-    ]
-
-
 
     # 初始化分布式环境
     distributed = RingAllReduce(args.rank, args.world_size, nodes)
@@ -154,64 +156,92 @@ def main():
     optimizer = Adam(model.parameters(), lr=config["learning_rate"])
 
     def train(epoch):
+        model.train()
+        total_samples = 0
         running_loss = 0.0
-        total_batches = len(train_loader)
-        print(f"\n【Epoch {epoch + 1}】")
+        correct = 0
+        total = 0
+        epoch_start_time = time.time()
         
-        # 用于计算整个 epoch 的统计信息
-        epoch_loss = 0.0
-        epoch_correct = 0
-        epoch_total = 0
-        
-        for batch_idx, (inputs, target) in enumerate(train_loader):
-            outputs = model(inputs)
-            loss = criterion(outputs, target)
-
+        for batch_idx, (inputs, labels) in enumerate(train_loader):
+            batch_start_time = time.time()
+            
             optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
             loss.backward()
+            
             # 同步梯度
             for param in model.parameters():
                 if param.grad is not None:
-                    # 将 param.grad (cupy.ndarray) 转换为 MetaTensor
-                    grad_tensor = Tensor(param.grad)  # 使用 Tensor 类包装 cupy.ndarray
+                    grad_tensor = Tensor(param.grad)
                     synced_grad = distributed.allreduce(grad_tensor)
-                    # 使用 copyto 来更新数据
                     cp.copyto(param.grad, synced_grad.data / args.world_size)
-
+            
             optimizer.step()
-
-            running_loss += loss.item()
-            epoch_loss += loss.item()
-
+            
             # 计算准确率
             predicted = mymax().forward(outputs.data, axis=1)
             predicted = cp.rint(predicted)
-            correct = (predicted == target.array()).sum().item()
-            accuracy = 100 * correct / target.array().size
+            total += labels.array().size
+            correct += (predicted == labels.array()).sum().item()
+            accuracy = 100 * correct / total
             
-            epoch_correct += correct
-            epoch_total += target.array().size
-
-            # 只在主进程中记录日志
-            if args.rank == 0 and batch_idx % 10 == 0:
+            # 更新统计信息
+            running_loss += loss.item()
+            total_samples += inputs.shape[0]
+            batch_time = time.time() - batch_start_time
+            samples_per_second = inputs.shape[0] / batch_time
+            
+            if args.rank == 0 and batch_idx % 10 == 0:  # rank 0每10个批次输出一次
                 avg_loss = running_loss / (batch_idx + 1)
-                # 只在主进程中使用 swanlab.log
-                swanlab.log({
-                    "main/loss": avg_loss,
-                }, step=epoch * total_batches + batch_idx)
+                progress = {
+                    "rank": args.rank,
+                    "epoch": epoch + 1,
+                    "batch": batch_idx + 1,
+                    "total_batches": len(train_loader),
+                    "samples_processed": total_samples,
+                    "accuracy": accuracy,
+                    "loss": avg_loss,
+                    "samples_per_second": samples_per_second,
+                    "active_nodes": args.world_size
+                }
                 
-                print(f"Batch [{batch_idx + 1}/{total_batches}] - Loss: [{avg_loss:.4f}] - Accuracy: [{accuracy:.2f}%]", end="\r")
-            else:
-                # 非主进程只打印进度
-                print(f"Rank {args.rank} - Batch [{batch_idx + 1}/{total_batches}] - Loss: [{loss.item():.4f}] - Accuracy: [{accuracy:.2f}%]", end="\r")
+                # 打印训练信息到终端
+                print(f"\r【Epoch {epoch + 1}】Batch [{batch_idx + 1}/{len(train_loader)}] - "
+                      f"Loss: [{avg_loss:.4f}] - Accuracy: [{accuracy:.2f}%] - "
+                      f"Speed: [{samples_per_second:.1f} samples/s]", end="")
+                
+                # 将进度信息写入状态文件
+                status_file = os.path.join(root_dir, 'cases', 'web', 'static', 'training_status.json')
+                with open(status_file, 'w') as f:
+                    json.dump(progress, f)
+            
+            elif args.rank > 0 and batch_idx % 10 == 0:  # 其他rank也打印信息
+                avg_loss = running_loss / (batch_idx + 1)
+                print(f"\rRank {args.rank} - Epoch {epoch + 1} - "
+                      f"Batch [{batch_idx + 1}/{len(train_loader)}] - "
+                      f"Loss: [{avg_loss:.4f}] - Accuracy: [{accuracy:.2f}%]", end="")
+
+        # 每个epoch结束打印汇总信息
+        epoch_avg_loss = running_loss / len(train_loader)
+        epoch_accuracy = 100 * correct / total
+        epoch_time = time.time() - epoch_start_time
+        avg_speed = total_samples / epoch_time
+        
+        print(f"\nRank {args.rank} - Epoch {epoch + 1} Summary:")
+        print(f"Average Loss: {epoch_avg_loss:.4f}")
+        print(f"Accuracy: {epoch_accuracy:.2f}%")
+        print(f"Average Speed: {avg_speed:.1f} samples/s")
+        print(f"Time Used: {epoch_time:.2f}s")
+        print("-" * 50)
 
         # 在主进程中记录训练指标
         if args.rank == 0:
-            epoch_avg_loss = epoch_loss / total_batches
-            epoch_accuracy = 100 * epoch_correct / epoch_total
             run.log({
                 "train_loss": epoch_avg_loss,
-                "train_accuracy": epoch_accuracy
+                "train_accuracy": epoch_accuracy,
+                "training_speed": avg_speed
             })
 
     def test():
@@ -245,7 +275,7 @@ def main():
 
     # 训练循环
     try:
-        for epoch in range(10):
+        for epoch in range(config["num_epochs"]):  # 使用配置的轮数
             train(epoch)
             if args.rank == 0:  # 只在主进程上测试
                 test()

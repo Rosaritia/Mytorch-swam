@@ -1,0 +1,1 @@
+{"rank": 0, "epoch": 10, "batch": 311, "total_batches": 313, "samples_processed": 19904, "accuracy": 81.95337620578778, "loss": 0.5600753938730801, "samples_per_second": 763.8332764233195, "active_nodes": 3}

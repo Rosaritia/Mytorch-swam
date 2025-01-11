@@ -548,11 +548,11 @@ def chat():
         }), 500
 
 if __name__ == '__main__':
-    print(f"【训练控制面板启动成功！】开始训练请访问: http://127.0.0.1:5000")
+    print(f"【训练控制面板启动成功！】开始训练请访问: http://127.0.0.1:7898")
     
     # 确保启动时生成网络结构图
     if not os.path.exists(os.path.join(static_dir, 'network_structure.png')):
         if not generate_network_graph():
             print("警告：启动时网络结构图生成失败")
     
-    app.run(host='0.0.0.0', port=5000, debug=False) 
+    app.run(host='0.0.0.0', port=7898, debug=False) 
